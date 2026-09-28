@@ -2,39 +2,33 @@
 parse_pdf.py
 Parses a single RBZ daily "RATES_DD_MONTH_YYYY.pdf" into structured rows.
 
-The PDF is a single-page text table (no OCR needed) shaped like:
-
-    CURRENCY INDICES BID ASK MID RATE BID RATE ASK RATE MID RATE
-    ZWG ZWG ZWG
-    INTERBANK RATE
-    USD 1 1 1.0000 25.9637 27.2951 26.6294
-    ZAR 16.4026 16.4065 16.40455 0.6009 0.6319 0.6164
-    GBP * 1.3218 1.3221 1.32195 34.3188 36.0868 35.2028
-    ...
-    Friday, 25 September 2026
-
 Each data row has: CURRENCY [*] IDX_BID IDX_ASK IDX_MID ZWG_BID ZWG_ASK ZWG_MID
+
+PDF text extraction sometimes splits a number with a stray space, e.g.
+    ZAR 16.0043 16.0069 1 6.00560 0.5827 0.6127 0.5977
+    MWK 1717.0200 1751.0000 1 ,734.01000 62.5168 67.0236 64.7702
+    USD 1 1 1 .0000 26.1251 27.4649 26.7950
+So we take the first two tokens as idx_bid/idx_ask, the last three as the
+ZWG rates, and rejoin whatever is in between as idx_mid. Each mid value is
+checked against (bid + ask) / 2 so a bad rejoin is caught, not stored.
 """
 
+import io
 import re
 from datetime import datetime
-import pdfplumber
-import io
 
-# Matches a currency code (letters/digits/slash), an optional trailing
-# asterisk (RBZ marks some currencies this way), then exactly 6 numbers
-# (numbers may contain commas as thousand separators).
+import pdfplumber
+
+# Data row: currency code (optionally like ZMW/ZMK), optional *, then numbers.
 ROW_RE = re.compile(
-    r"^(?P<currency>[A-Z0-9/]+)\s*\*?\s+"
-    r"(?P<nums>[\d,.\s]+)$"
+    r"^(?P<currency>[A-Z]{3}(?:/[A-Z]{3})?)\s*\*?\s+(?P<rest>[\d.,\s]+)$"
 )
 
-NUMBER_RE = re.compile(r"[\d,]+\.\d+|\d+")
+# Anything that looks like it should be a data row (used to detect drops).
+CANDIDATE_RE = re.compile(r"^[A-Z]{3}(?:/[A-Z]{3})?\s*\*?\s+[\d.,]")
 
-# RBZ has used at least two footer date formats across different months:
-#   "Friday, 25 September 2026"      (day, then month)
-#   "Wednesday, August 19, 2026"     (month, then day, extra comma)
-# Both are tried, in order, since only one will match any given file.
+MID_TOLERANCE = 0.005  # 0.5% allowed difference vs (bid + ask) / 2
+
 DATE_PATTERNS = [
     # Day first: "Friday, 25 September 2026"
     (
@@ -51,18 +45,17 @@ DATE_PATTERNS = [
 ]
 
 
-def _parse_numbers(num_blob):
-    """Extract up to 6 float values from a whitespace/comma-separated blob."""
-    raw = NUMBER_RE.findall(num_blob)
-    return [float(n.replace(",", "")) for n in raw]
+def _num(s):
+    return float(s.replace(",", "").replace(" ", ""))
+
+
+def _mid_ok(bid, ask, mid):
+    expected = (bid + ask) / 2
+    return abs(mid - expected) <= MID_TOLERANCE * max(abs(expected), 1e-9)
 
 
 def parse_date(text):
-    """
-    Find the footer date line and return an ISO date string.
-    Tries each known RBZ date format in turn (see DATE_PATTERNS above),
-    since the format has changed between months in the past.
-    """
+    """Find the date line and return an ISO date string (or None)."""
     for pattern, strptime_fmt, build_str in DATE_PATTERNS:
         m = pattern.search(text)
         if m:
@@ -71,48 +64,55 @@ def parse_date(text):
     return None
 
 
+def _parse_row(currency, rest):
+    """Return a row dict, or None if the line can't be trusted."""
+    toks = rest.split()
+    if len(toks) < 6:
+        return None
+    try:
+        idx_bid = _num(toks[0])
+        idx_ask = _num(toks[1])
+        zwg_bid, zwg_ask, zwg_mid = (_num(t) for t in toks[-3:])
+        idx_mid = _num("".join(toks[2:-3]))  # rejoin a split mid value
+    except ValueError:
+        return None
+
+    if not _mid_ok(idx_bid, idx_ask, idx_mid):
+        return None
+    if not _mid_ok(zwg_bid, zwg_ask, zwg_mid):
+        return None
+
+    return {
+        "currency": currency,
+        "idx_bid": idx_bid,
+        "idx_ask": idx_ask,
+        "idx_mid": idx_mid,
+        "zwg_bid": zwg_bid,
+        "zwg_ask": zwg_ask,
+        "zwg_mid": zwg_mid,
+    }
+
+
 def parse_rates(text):
-    """
-    Parse the full extracted PDF text into a list of row dicts:
-        {currency, idx_bid, idx_ask, idx_mid, zwg_bid, zwg_ask, zwg_mid}
-    Skips header/footer lines that don't match the row pattern.
-    """
+    """Parse the extracted PDF text into a list of row dicts."""
     rows = []
     for line in text.splitlines():
         line = line.strip()
-        if not line:
+        m = ROW_RE.match(line)
+        if not m:
             continue
-        match = ROW_RE.match(line)
-        if not match:
-            continue
-        currency = match.group("currency")
-        # Skip obvious header tokens that happen to look like currency codes
-        if currency in {"CURRENCY", "INDICES", "BID", "ASK", "MID", "RATE", "INTERBANK"}:
-            continue
-        nums = _parse_numbers(match.group("nums"))
-        if len(nums) != 6:
-            # Malformed / unexpected row shape — skip rather than guess
-            continue
-        idx_bid, idx_ask, idx_mid, zwg_bid, zwg_ask, zwg_mid = nums
-        rows.append(
-            {
-                "currency": currency,
-                "idx_bid": idx_bid,
-                "idx_ask": idx_ask,
-                "idx_mid": idx_mid,
-                "zwg_bid": zwg_bid,
-                "zwg_ask": zwg_ask,
-                "zwg_mid": zwg_mid,
-            }
-        )
+        row = _parse_row(m.group("currency"), m.group("rest"))
+        if row:
+            rows.append(row)
     return rows
 
 
 def parse_pdf_bytes(pdf_bytes):
     """
     Given raw PDF bytes, return (date_str, rows).
-    Raises ValueError if the date or rows can't be found (signals a
-    format change worth investigating rather than silently failing).
+    Raises ValueError if the date or rows can't be found, or if any line that
+    looks like a currency row could not be parsed (so nothing is dropped
+    silently).
     """
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         text = "\n".join(page.extract_text() or "" for page in pdf.pages)
@@ -125,11 +125,21 @@ def parse_pdf_bytes(pdf_bytes):
     if not rows:
         raise ValueError("Could not parse any currency rows from the PDF text.")
 
+    candidates = [
+        l.strip() for l in text.splitlines() if CANDIDATE_RE.match(l.strip())
+    ]
+    if len(rows) < len(candidates):
+        parsed = {r["currency"] for r in rows}
+        missed = [c for c in candidates if c.split()[0] not in parsed]
+        raise ValueError(
+            f"Parsed {len(rows)} of {len(candidates)} currency lines. "
+            f"Unparsed: {missed}"
+        )
+
     return date_str, rows
 
 
 if __name__ == "__main__":
-    # Quick manual test using a saved sample PDF, if present.
     import sys
 
     if len(sys.argv) != 2:
