@@ -138,9 +138,14 @@ fetch('data.json').then(r => r.json()).then(data => {
   });
   select.value = 'USD' in data.history ? 'USD' : select.options[0].value;
 
-  Chart.defaults.font.family = "'IBM Plex Sans', system-ui, sans-serif";
   let chart;
   function drawChart(currency) {
+    try { buildChart(currency); } catch (e) {
+      console.error(e);
+      document.getElementById('updated').textContent = 'Chart error: ' + e.message;
+    }
+  }
+  function buildChart(currency) {
     const series = data.history[currency] || [];
     const ctx = document.getElementById('trendChart').getContext('2d');
     if (chart) chart.destroy();
@@ -187,8 +192,9 @@ fetch('data.json').then(r => r.json()).then(data => {
   }
   drawChart(select.value);
   select.addEventListener('change', () => drawChart(select.value));
-}).catch(() => {
-  document.getElementById('updated').textContent = "Couldn't load the rates. Refresh to try again.";
+}).catch(e => {
+  console.error(e);
+  document.getElementById('updated').textContent = "Couldn't load the rates: " + e.message;
 });
 </script>
 </body>
