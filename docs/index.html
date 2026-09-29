@@ -4,51 +4,128 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RBZ Exchange Rates</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
-  :root { color-scheme: dark; }
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:#0f1115; color:#e8e8e8; margin:0; padding:2rem 1rem; }
-  h1 { font-size:1.4rem; margin-bottom:0.2rem; }
-  .updated { color:#9aa0a6; font-size:0.85rem; margin-bottom:1.5rem; }
-  .wrap { max-width:900px; margin:0 auto; }
-  select { background:#1b1e24; color:#e8e8e8; border:1px solid #333; padding:0.4rem 0.6rem; border-radius:6px; margin-bottom:1rem; }
-  canvas { max-height:340px; margin-bottom:2rem; }
-  table { width:100%; border-collapse:collapse; font-size:0.9rem; }
-  th, td { text-align:left; padding:0.4rem 0.6rem; border-bottom:1px solid #262930; }
-  th { color:#9aa0a6; font-weight:600; position:sticky; top:0; background:#0f1115; }
-  input { background:#1b1e24; color:#e8e8e8; border:1px solid #333; padding:0.4rem 0.6rem; border-radius:6px; width:100%; max-width:220px; margin-bottom:0.8rem; }
+  :root {
+    color-scheme: dark;
+    --bg: #06231a;
+    --card: #0d3325;
+    --line: #154736;
+    --text: #f5f1e0;
+    --muted: #8fb5a2;
+    --gold: #e0b13a;
+    --emerald: #2f8f6b;
+    --display: 'Fraunces', Georgia, serif;
+    --body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 2.5rem 1rem 4rem; background: var(--bg); color: var(--text); font-family: var(--body); line-height: 1.5; }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid var(--gold); }
+  h1 { margin: 0; font-family: var(--display); font-weight: 600; font-size: clamp(1.7rem, 4vw, 2.3rem); letter-spacing: -0.01em; }
+  .updated { color: var(--muted); font-size: 0.9rem; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.15rem; }
+  .stat span { display: block; color: var(--muted); font-size: 0.85rem; margin-bottom: 0.15rem; }
+  .stat b { font-family: var(--display); font-weight: 500; font-size: 1.9rem; }
+  .stat.key b { color: var(--gold); }
+
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1.15rem; margin-bottom: 1.5rem; }
+  .panel-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+  h2 { margin: 0; font-family: var(--display); font-weight: 500; font-size: 1.25rem; }
+  .chart-box { position: relative; height: 320px; }
+
+  label { color: var(--muted); font-size: 0.85rem; margin-right: 0.5rem; }
+  select, input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.7rem; font: inherit; font-size: 0.9rem; }
+  input { width: 100%; max-width: 240px; }
+  input::placeholder { color: var(--muted); opacity: 0.8; }
+  select:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--gold); font-weight: 500; font-size: 0.85rem; position: sticky; top: 0; background: var(--card); border-bottom: 1px solid var(--gold); }
+  th.r, td.r { text-align: right; }
+  tbody tr:hover { background: rgba(47, 143, 107, 0.15); }
+  td:first-child { font-weight: 500; }
+  .empty { color: var(--muted); padding: 1rem 0.75rem; }
+
+  @media (max-width: 520px) {
+    body { padding-top: 1.5rem; }
+    .chart-box { height: 260px; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>RBZ Exchange Rates</h1>
-  <div class="updated" id="updated">Loading…</div>
+  <header>
+    <h1>RBZ exchange rates</h1>
+    <div class="updated" id="updated">Loading…</div>
+  </header>
 
-  <label for="currencySelect">Trend for:</label>
-  <select id="currencySelect"></select>
-  <canvas id="trendChart"></canvas>
+  <section class="stats" aria-label="Latest rates">
+    <div class="stat key"><span>USD / ZWG</span><b class="num" id="statUsd">–</b></div>
+    <div class="stat"><span>ZAR / ZWG</span><b class="num" id="statZar">–</b></div>
+    <div class="stat"><span>Currencies</span><b class="num" id="statCount">–</b></div>
+  </section>
 
-  <input id="filter" placeholder="Filter currency…">
-  <table>
-    <thead><tr><th>Currency</th><th>Index mid (vs USD)</th><th>ZWG mid</th></tr></thead>
-    <tbody id="ratesBody"></tbody>
-  </table>
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Trend</h2>
+      <div>
+        <label for="currencySelect">Currency</label>
+        <select id="currencySelect"></select>
+      </div>
+    </div>
+    <div class="chart-box"><canvas id="trendChart" aria-label="Rate trend chart" role="img"></canvas></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Latest rates</h2>
+      <input id="filter" type="search" placeholder="Filter currency" aria-label="Filter currency">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Currency</th><th class="r">Index mid (vs USD)</th><th class="r">ZWG mid</th></tr></thead>
+        <tbody id="ratesBody"></tbody>
+      </table>
+    </div>
+  </section>
 </div>
 
 <script>
 fetch('data.json').then(r => r.json()).then(data => {
-  document.getElementById('updated').textContent = 'Latest: ' + data.latest_date;
+  const d = new Date(data.latest_date + 'T00:00:00');
+  document.getElementById('updated').textContent = 'Updated ' + (isNaN(d)
+    ? data.latest_date
+    : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }));
+
+  const find = code => data.latest.find(r => r.currency === code);
+  const fmt = v => (v == null ? '–' : Number(v).toFixed(4));
+  document.getElementById('statUsd').textContent = fmt(find('USD') && find('USD').zwg_mid);
+  document.getElementById('statZar').textContent = fmt(find('ZAR') && find('ZAR').zwg_mid);
+  document.getElementById('statCount').textContent = data.latest.length;
 
   const body = document.getElementById('ratesBody');
   function render(filter) {
     body.innerHTML = '';
-    data.latest
-      .filter(r => r.currency.toLowerCase().includes(filter.toLowerCase()))
-      .forEach(r => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${r.currency}</td><td>${r.idx_mid ?? ''}</td><td>${r.zwg_mid ?? ''}</td>`;
-        body.appendChild(tr);
-      });
+    const rows = data.latest.filter(r => r.currency.toLowerCase().includes(filter.toLowerCase()));
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="3" class="empty">No currencies match that filter.</td></tr>';
+      return;
+    }
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.currency}</td><td class="r num">${r.idx_mid ?? ''}</td><td class="r num">${r.zwg_mid ?? ''}</td>`;
+      body.appendChild(tr);
+    });
   }
   render('');
   document.getElementById('filter').addEventListener('input', e => render(e.target.value));
@@ -61,6 +138,7 @@ fetch('data.json').then(r => r.json()).then(data => {
   });
   select.value = 'USD' in data.history ? 'USD' : select.options[0].value;
 
+  Chart.defaults.font.family = "'IBM Plex Sans', system-ui, sans-serif";
   let chart;
   function drawChart(currency) {
     const series = data.history[currency] || [];
@@ -73,24 +151,44 @@ fetch('data.json').then(r => r.json()).then(data => {
         datasets: [{
           label: currency + ' ZWG mid',
           data: series.map(p => p.zwg_mid),
-          borderColor: '#4f9eff',
-          backgroundColor: 'rgba(79,158,255,0.15)',
-          tension: 0.2,
+          borderColor: '#e0b13a',
+          backgroundColor: 'rgba(47,143,107,0.22)',
+          borderWidth: 2.5,
+          fill: true,
+          tension: 0.25,
           pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: '#e0b13a',
         }]
       },
       options: {
         responsive: true,
-        plugins: { legend: { labels: { color: '#e8e8e8' } } },
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#06231a',
+            borderColor: '#e0b13a',
+            borderWidth: 1,
+            titleColor: '#8fb5a2',
+            bodyColor: '#f5f1e0',
+            padding: 10,
+            displayColors: false,
+            callbacks: { label: c => currency + ' ' + c.formattedValue + ' ZWG' }
+          }
+        },
         scales: {
-          x: { ticks: { color: '#9aa0a6', maxTicksLimit: 8 }, grid: { color: '#262930' } },
-          y: { ticks: { color: '#9aa0a6' }, grid: { color: '#262930' } }
+          x: { ticks: { color: '#8fb5a2', maxTicksLimit: 8 }, grid: { color: '#154736' }, border: { color: '#154736' } },
+          y: { ticks: { color: '#8fb5a2' }, grid: { color: '#154736' }, border: { display: false } }
         }
       }
     });
   }
   drawChart(select.value);
   select.addEventListener('change', () => drawChart(select.value));
+}).catch(() => {
+  document.getElementById('updated').textContent = "Couldn't load the rates. Refresh to try again.";
 });
 </script>
 </body>
